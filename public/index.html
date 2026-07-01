@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Imposter — Word Game</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<canvas id="confetti-canvas" aria-hidden="true"></canvas>
+<div class="app-shell">
+
+  <div id="mode-select-screen" data-screen class="glass-card">
+    <h1>🎭 Imposter</h1>
+    <p class="subtitle">One player gets a different word. Find them before they blend in.</p>
+    <button id="mode-online-btn" class="btn btn-primary">Play Online</button>
+    <button id="mode-local-btn" class="btn btn-secondary">Pass &amp; Play (one device)</button>
+  </div>
+
+  <div id="start-screen" data-screen class="glass-card">
+    <h2>Play Online</h2>
+    <input id="name-input" class="input-field" type="text" placeholder="Your name" aria-label="Your name" />
+    <button id="create-btn" class="btn btn-primary">Create Room</button>
+    <button id="show-join-btn" class="btn btn-secondary">Join a Room</button>
+  </div>
+
+  <div id="join-screen" data-screen class="glass-card">
+    <h2>Join a Room</h2>
+    <input id="code-input" class="input-field" type="text" placeholder="Room code" maxlength="4" aria-label="Room code" />
+    <button id="join-btn" class="btn btn-primary">Join</button>
+    <p id="error-msg" class="form-error" role="alert"></p>
+  </div>
+
+  <div id="lobby-screen" data-screen class="glass-card">
+    <div style="display:flex; align-items:center; justify-content:space-between;">
+      <h2>Room <span id="room-code-display"></span></h2>
+      <button id="copy-code-btn" class="btn-ghost">Copy Code</button>
+    </div>
+    <p class="subtitle">Share the code — game starts when the host is ready.</p>
+    <p id="abort-banner" class="status-banner" style="display:none;"></p>
+
+    <ul id="player-list" class="player-list"></ul>
+
+    <div id="rounds-control" style="display:none;">
+      <label for="rounds-select" class="subtitle">Number of rounds</label>
+      <select id="rounds-select" class="input-field">
+        <option value="1">1 round</option>
+        <option value="2" selected>2 rounds</option>
+        <option value="3">3 rounds</option>
+        <option value="4">4 rounds</option>
+      </select>
+    </div>
+    <p id="rounds-display" class="subtitle"></p>
+
+    <button id="start-btn" class="btn btn-primary" style="display:none;">Start Game</button>
+    <p id="start-error" class="form-error" role="alert"></p>
+  </div>
+
+  <div id="word-screen" data-screen class="glass-card">
+    <div class="word-reveal-card">
+      <p class="subtitle">Your word</p>
+      <p id="word-display" class="word-text"></p>
+    </div>
+    <p class="subtitle">Say a one-word clue related to your word — don't say the word itself.</p>
+
+    <div id="round-dots" class="round-dots"></div>
+    <p id="round-display" class="subtitle"></p>
+    <p id="turn-display" style="font-weight:600;"></p>
+
+    <div id="clue-input-area" style="display:none;">
+      <input id="clue-input" class="input-field" type="text" placeholder="Your one-word clue" aria-label="Your clue" />
+      <button id="submit-clue-btn" class="btn btn-primary">Submit Clue</button>
+      <p id="clue-error" class="form-error" role="alert"></p>
+    </div>
+
+    <h3 style="margin-top:20px;">Clues so far</h3>
+    <ul id="clue-list" class="player-list"></ul>
+  </div>
+
+  <div id="voting-screen" data-screen class="glass-card">
+    <h2>Who's the imposter?</h2>
+    <p id="vote-progress-display" class="subtitle"></p>
+    <div id="vote-options" class="vote-grid"></div>
+    <p id="vote-error" class="form-error" role="alert"></p>
+  </div>
+
+  <div id="results-screen" data-screen class="glass-card">
+    <div id="results-card-inner" class="results-card">
+  <h2 id="results-headline" class="results-headline"></h2>
+  <p id="results-subtext" class="subtitle"></p>
+  <div class="word-reveal-row">
+    <div class="word-chip">
+      <span class="word-chip-label">Citizen word</span>
+      <span id="results-citizen-word" class="word-chip-value"></span>
+    </div>
+    <div class="word-chip word-chip-imposter">
+      <span class="word-chip-label">Imposter word</span>
+      <span id="results-imposter-word" class="word-chip-value"></span>
+    </div>
+  </div>
+</div>
+    <h3 style="margin-top:20px;">Vote breakdown</h3>
+    <ul id="results-tally" class="player-list"></ul>
+    <button id="play-again-btn" class="btn btn-primary">Play Again</button>
+    <p id="play-again-waiting" class="subtitle" style="display:none;">Waiting for the host to start a new round…</p>
+  </div>
+
+  <!-- PASS & PLAY -->
+  <div id="local-setup-screen" data-screen class="glass-card">
+    <h2>Pass &amp; Play Setup</h2>
+    <p class="subtitle">Add every player (3 minimum), then pass the device around.</p>
+    <input id="local-name-input" class="input-field" type="text" placeholder="Player name" aria-label="Player name" />
+    <button id="local-add-btn" class="btn btn-secondary">Add Player</button>
+    <ul id="local-player-list" class="player-list"></ul>
+    <button id="local-start-btn" class="btn btn-primary" disabled>Start Game</button>
+  </div>
+
+  <div id="local-pass-screen" data-screen class="glass-card">
+    <h2 id="local-pass-name"></h2>
+    <div id="local-reveal-box" class="word-reveal-card" style="cursor:pointer;">
+      <p id="local-reveal-prompt" class="subtitle">Tap to reveal your word</p>
+      <p id="local-reveal-word" class="word-text" style="display:none;"></p>
+    </div>
+    <button id="local-next-pass-btn" class="btn btn-primary" style="display:none;">Got it — pass the device</button>
+  </div>
+
+  <div id="local-accuse-screen" data-screen class="glass-card">
+    <h2>Discuss out loud, then pick the imposter</h2>
+    <div id="local-accuse-options" class="vote-grid"></div>
+  </div>
+
+  <div id="local-results-screen" data-screen class="glass-card">
+    <div id="local-results-card-inner" class="results-card">
+  <h2 id="local-results-headline" class="results-headline"></h2>
+  <p id="local-results-subtext" class="subtitle"></p>
+  <div class="word-reveal-row">
+    <div class="word-chip">
+      <span class="word-chip-label">Citizen word</span>
+      <span id="local-results-citizen-word" class="word-chip-value"></span>
+    </div>
+    <div class="word-chip word-chip-imposter">
+      <span class="word-chip-label">Imposter word</span>
+      <span id="local-results-imposter-word" class="word-chip-value"></span>
+    </div>
+  </div>
+</div>
+    <button id="local-play-again-btn" class="btn btn-primary">Play Again</button>
+  </div>
+
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="wordPairs.js"></script>
+<script src="localGame.js"></script>
+<script src="client.js"></script>
+</body>
+</html>
