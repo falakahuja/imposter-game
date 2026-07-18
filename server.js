@@ -4,7 +4,7 @@ const { Server } = require('socket.io');
 const path = require('path');
 const {
   createRoom, joinRoom, removePlayer, getRoom,
-  startGame, submitClue, submitVote, setRounds, resetRoom,
+  startGame, handleGameAction, setRounds, resetRoom,
 } = require('./rooms');
 
 const app = express();
@@ -14,8 +14,8 @@ const io = new Server(server);
 app.use(express.static(path.join(__dirname, 'public')));
 
 io.on('connection', (socket) => {
-  socket.on('create-room', ({ name }) => {
-    const room = createRoom(socket.id, name);
+  socket.on('create-room', ({ name, mode }) => {
+    const room = createRoom(socket.id, name, mode);
     socket.join(room.code);
     socket.emit('room-joined', room);
   });
@@ -39,36 +39,64 @@ io.on('connection', (socket) => {
     if (result.error) return socket.emit('start-error', { message: result.error });
 
     const room = result.room;
-    room.players.forEach((player) => io.to(player.id).emit('your-word', { word: player.word }));
+    room.players.forEach((player) => {
+      const privatePayload = result.privatePayloads?.[player.id];
+      const isMafiaMode = room.mode === 'mafia';
+      io.to(player.id).emit('your-word', {
+        word: privatePayload?.word ?? privatePayload?.role ?? player.word,
+        mode: room.mode,
+        role: privatePayload?.role ?? null,
+      });
+    });
     io.to(room.code).emit('game-started', {
       code: room.code,
-      players: room.players.map(p => ({ id: p.id, name: p.name })),
-      currentPlayerId: room.players[room.turnIndex].id,
-      currentRound: room.currentRound,
-      totalRounds: room.totalRounds,
+      players: room.players.map((player) => ({ id: player.id, name: player.name })),
+      mode: room.mode,
+      ...(room.mode === 'imposter' ? {
+        currentPlayerId: room.players[room.modeState.turnIndex].id,
+        currentRound: room.modeState.currentRound,
+        totalRounds: room.modeState.settings.totalRounds,
+      } : {}),
     });
   });
 
-  socket.on('submit-clue', ({ code, clue }) => {
-    const result = submitClue(code, socket.id, clue);
-    if (result.error) return socket.emit('clue-error', { message: result.error });
+  socket.on('game-action', ({ code, action, payload }) => {
+    const result = handleGameAction(code, socket.id, action, payload);
+    if (result.error) {
+      if (action === 'submit-clue') return socket.emit('clue-error', { message: result.error });
+      if (action === 'submit-vote') return socket.emit('vote-error', { message: result.error });
+      return socket.emit('game-action-error', { message: result.error });
+    }
 
     const room = result.room;
-    io.to(room.code).emit('clue-submitted', {
-      clues: room.clues,
-      currentRound: room.currentRound,
-      totalRounds: room.totalRounds,
-      currentPlayerId: room.state === 'playing' ? room.players[room.turnIndex].id : null,
-      gameComplete: result.gameComplete,
-    });
-  });
+    if (room.mode === 'mafia') {
+      const payload = {
+        room,
+        resolution: result.broadcastPayload?.resolution || null,
+      };
+      io.to(room.code).emit('room-updated', payload);
+      if (result.broadcastPayload?.resolution?.winner) {
+        io.to(room.code).emit('game-results', {
+          winner: result.broadcastPayload.resolution.winner.winner,
+          roles: result.broadcastPayload.resolution.winner.roles,
+        });
+      }
+      return;
+    }
 
-  socket.on('submit-vote', ({ code, votedForId }) => {
-    const result = submitVote(code, socket.id, votedForId);
-    if (result.error) return socket.emit('vote-error', { message: result.error });
+    if (action === 'submit-clue') {
+      io.to(room.code).emit('clue-submitted', result.broadcastPayload);
+      return;
+    }
 
-    io.to(code).emit('vote-progress', { votesSoFar: result.votesSoFar, totalPlayers: result.totalPlayers });
-    if (result.allVoted) io.to(code).emit('game-results', result.results);
+    if (action === 'submit-vote') {
+      io.to(code).emit('vote-progress', {
+        votesSoFar: result.broadcastPayload.votesSoFar,
+        totalPlayers: result.broadcastPayload.totalPlayers,
+      });
+      if (result.broadcastPayload.allVoted) io.to(code).emit('game-results', result.broadcastPayload.results);
+      return;
+    }
   });
 
   socket.on('play-again', ({ code }) => {
@@ -99,16 +127,16 @@ io.on('connection', (socket) => {
     }
     if (room.state === 'playing') {
       io.to(room.code).emit('clue-submitted', {
-        clues: room.clues,
-        currentRound: room.currentRound,
-        totalRounds: room.totalRounds,
-        currentPlayerId: room.players[room.turnIndex].id,
+        clues: room.modeState?.clues || [],
+        currentRound: room.modeState?.currentRound || 1,
+        totalRounds: room.modeState?.settings?.totalRounds || room.totalRounds,
+        currentPlayerId: room.players[room.modeState?.turnIndex || 0]?.id || null,
         gameComplete: false,
       });
     }
     if (room.state === 'voting') {
       io.to(room.code).emit('vote-progress', {
-        votesSoFar: Object.keys(room.votes).length,
+        votesSoFar: Object.keys(room.modeState?.votes || {}).length,
         totalPlayers: room.players.length,
       });
     }
