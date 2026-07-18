@@ -19,11 +19,6 @@
 
   <div id="start-screen" data-screen class="glass-card">
     <h2>Play Online</h2>
-    <p class="subtitle">Choose a mode before creating a room.</p>
-    <div class="vote-grid">
-      <button id="mode-imposter-btn" class="btn btn-secondary">Imposter</button>
-      <button id="mode-mafia-btn" class="btn btn-secondary">Mafia</button>
-    </div>
     <input id="name-input" class="input-field" type="text" placeholder="Your name" aria-label="Your name" />
     <button id="create-btn" class="btn btn-primary">Create Room</button>
     <button id="show-join-btn" class="btn btn-secondary">Join a Room</button>
@@ -108,56 +103,6 @@
     <ul id="results-tally" class="player-list"></ul>
     <button id="play-again-btn" class="btn btn-primary">Play Again</button>
     <p id="play-again-waiting" class="subtitle" style="display:none;">Waiting for the host to start a new round…</p>
-  </div>
-
-  <div id="mafia-role-screen" data-screen class="glass-card">
-    <div class="word-reveal-card">
-      <p class="subtitle">Your role</p>
-      <p id="mafia-role-display" class="word-text"></p>
-    </div>
-    <p id="mafia-role-subtitle" class="subtitle"></p>
-    <button id="mafia-continue-btn" class="btn btn-primary">Continue to night</button>
-  </div>
-
-  <div id="mafia-night-screen" data-screen class="glass-card">
-    <h2>Night phase</h2>
-    <p id="mafia-night-subtitle" class="subtitle"></p>
-    <div id="mafia-night-actions" class="vote-grid"></div>
-    <p id="mafia-night-status" class="subtitle"></p>
-  </div>
-
-  <div id="mafia-day-screen" data-screen class="glass-card">
-    <h2>Day discussion</h2>
-    <p id="mafia-day-summary" class="subtitle"></p>
-    <ul id="mafia-day-stats" class="player-list"></ul>
-    <button id="mafia-open-vote-btn" class="btn btn-primary">Open day vote</button>
-  </div>
-
-  <div id="mafia-vote-screen" data-screen class="glass-card">
-    <h2>Day vote</h2>
-    <p id="mafia-vote-subtitle" class="subtitle"></p>
-    <div id="mafia-vote-options" class="vote-grid"></div>
-    <p id="mafia-vote-error" class="form-error" role="alert"></p>
-  </div>
-
-  <div id="mafia-results-screen" data-screen class="glass-card">
-    <div id="mafia-results-card-inner" class="results-card">
-      <h2 id="mafia-results-headline" class="results-headline"></h2>
-      <p id="mafia-results-subtext" class="subtitle"></p>
-      <div class="word-reveal-row">
-        <div class="word-chip">
-          <span class="word-chip-label">Winner</span>
-          <span id="mafia-results-winner" class="word-chip-value"></span>
-        </div>
-        <div class="word-chip">
-          <span class="word-chip-label">Roles</span>
-          <span id="mafia-results-roles" class="word-chip-value"></span>
-        </div>
-      </div>
-    </div>
-    <h3 style="margin-top:20px;">Final roles</h3>
-    <ul id="mafia-results-list" class="player-list"></ul>
-    <button id="mafia-play-again-btn" class="btn btn-primary">Play Again</button>
   </div>
 
   <!-- PASS & PLAY -->
