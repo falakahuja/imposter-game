@@ -1,209 +1,59 @@
-const { getRandomPair } = require('./public/wordPairs');
+const { getMode } = require('./modes');
 
 const rooms = new Map();
-
-function generateRoomCode() {
-  const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-  let code;
-  do {
-    code = Array.from({ length: 4 }, () => letters[Math.floor(Math.random() * letters.length)]).join('');
-  } while (rooms.has(code));
-  return code;
+const codeLetters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+function makeCode() { let code; do { code = Array.from({ length: 4 }, () => codeLetters[Math.floor(Math.random() * codeLetters.length)]).join(''); } while (rooms.has(code)); return code; }
+function publicRoom(room) {
+  return { code: room.code, hostId: room.hostId, modeId: room.modeId, state: room.state, settings: room.settings,
+    players: room.players.map(({ id, name }) => ({ id, name })) };
 }
-
-function createRoom(hostSocketId, hostName) {
-  const code = generateRoomCode();
-  const room = {
-    code,
-    hostId: hostSocketId,
-    players: [{ id: hostSocketId, name: hostName }],
-    state: 'lobby',
-    totalRounds: 2,
-  };
-  rooms.set(code, room);
-  return room;
+function createRoom(hostId, name, modeId) {
+  const mode = getMode(modeId); if (!mode) return { error: 'That game is not available.' };
+  const room = { code: makeCode(), hostId, modeId, players: [{ id: hostId, name }], state: 'lobby', settings: { ...mode.defaultSettings }, game: {} };
+  rooms.set(room.code, room); return { room };
 }
-
-function joinRoom(code, socketId, name) {
-  const room = rooms.get(code);
-  if (!room) return { error: 'Room not found.' };
+function joinRoom(code, id, name) {
+  const room = rooms.get(code); if (!room) return { error: 'Room not found.' };
+  const mode = getMode(room.modeId);
   if (room.state !== 'lobby') return { error: 'Game already in progress.' };
-  room.players.push({ id: socketId, name });
-  return { room };
+  if (room.players.length >= mode.maxPlayers) return { error: 'This room is full.' };
+  room.players.push({ id, name }); return { room };
 }
-
-function setRounds(code, socketId, rounds) {
-  const room = rooms.get(code);
-  if (!room) return { error: 'Room not found.' };
-  if (room.hostId !== socketId) return { error: 'Only the host can change round count.' };
-  if (room.state !== 'lobby') return { error: 'Cannot change rounds after starting.' };
-  room.totalRounds = Math.min(4, Math.max(1, parseInt(rounds, 10) || 2));
-  return { room };
+function updateSettings(code, actor, settings) {
+  const room = rooms.get(code); if (!room) return { error: 'Room not found.' };
+  if (room.hostId !== actor) return { error: 'Only the host can change settings.' };
+  if (room.state !== 'lobby') return { error: 'Settings cannot be changed after starting.' };
+  const mode = getMode(room.modeId); room.settings = mode.sanitizeSettings({ ...room.settings, ...settings }); return { room };
 }
-
-function startGame(code, requestingSocketId) {
-  const room = rooms.get(code);
-  if (!room) return { error: 'Room not found.' };
-  if (room.hostId !== requestingSocketId) return { error: 'Only the host can start the game.' };
-  if (room.players.length < 3) return { error: 'Need at least 3 players to start.' };
-
-  const pair = getRandomPair();
-  const imposterIndex = Math.floor(Math.random() * room.players.length);
-
-  room.players.forEach((player, index) => {
-    player.isImposter = index === imposterIndex;
-    player.word = index === imposterIndex ? pair.imposter : pair.citizen;
-  });
-
-  room.state = 'playing';
-  room.currentRound = 1;
-  room.turnIndex = 0;
-  room.clues = [];
-
-  return { room };
+function startGame(code, actor) {
+  const room = rooms.get(code); if (!room) return { error: 'Room not found.' };
+  const mode = getMode(room.modeId);
+  if (room.hostId !== actor) return { error: 'Only the host can start the game.' };
+  if (room.players.length < mode.minPlayers) return { error: `Need at least ${mode.minPlayers} players to start.` };
+  const result = mode.engine.startGame(room, room.settings) || {}; return { room, ...result };
 }
-
-function submitClue(code, socketId, clueText) {
-  const room = rooms.get(code);
-  if (!room) return { error: 'Room not found.' };
-  if (room.state !== 'playing') return { error: 'Game is not in progress.' };
-
-  const currentPlayer = room.players[room.turnIndex];
-  if (!currentPlayer || currentPlayer.id !== socketId) return { error: "It's not your turn." };
-  if (!clueText || !clueText.trim()) return { error: 'Clue cannot be empty.' };
-
-  room.clues.push({ round: room.currentRound, playerId: socketId, playerName: currentPlayer.name, clue: clueText.trim() });
-  room.turnIndex++;
-  let gameComplete = false;
-
-  if (room.turnIndex >= room.players.length) {
-    room.turnIndex = 0;
-    room.currentRound++;
-    if (room.currentRound > room.totalRounds) {
-      room.state = 'voting';
-      room.votes = {};
-      gameComplete = true;
-    }
-  }
-
-  return { room, gameComplete };
+function gameAction(code, actor, action, payload) {
+  const room = rooms.get(code); if (!room) return { error: 'Room not found.' };
+  if (!room.players.some(p => p.id === actor)) return { error: 'You are not in this room.' };
+  const result = getMode(room.modeId).engine.handleAction(room, actor, action, payload || {}) || {};
+  return { room, ...result };
 }
-
-function submitVote(code, socketId, votedForId) {
-  const room = rooms.get(code);
-  if (!room) return { error: 'Room not found.' };
-  if (room.state !== 'voting') return { error: 'Voting is not open right now.' };
-  if (room.votes[socketId]) return { error: 'You already voted.' };
-  if (!room.players.some(p => p.id === votedForId)) return { error: 'Invalid vote target.' };
-
-  room.votes[socketId] = votedForId;
-  const votesSoFar = Object.keys(room.votes).length;
-  const allVoted = votesSoFar === room.players.length;
-
-  let results = null;
-  if (allVoted) {
-    results = computeResults(room);
-    room.state = 'finished';
-  }
-
-  return { room, votesSoFar, totalPlayers: room.players.length, allVoted, results };
+function resetRoom(code, actor) {
+  const room = rooms.get(code); if (!room) return { error: 'Room not found.' };
+  if (room.hostId !== actor) return { error: 'Only the host can start a new session.' };
+  getMode(room.modeId).engine.resetForReplay(room); return { room };
 }
-
-function computeResults(room) {
-  const tally = {};
-  room.players.forEach(p => { tally[p.id] = 0; });
-  Object.values(room.votes).forEach(votedForId => {
-    if (tally[votedForId] === undefined) tally[votedForId] = 0;
-    tally[votedForId]++;
-  });
-
-  const maxVotes = Math.max(...Object.values(tally));
-  const topVoted = Object.keys(tally).filter(id => tally[id] === maxVotes);
-  const imposter = room.players.find(p => p.isImposter);
-  const citizenWord = room.players.find(p => !p.isImposter)?.word;
-  const citizensWin = !!imposter && topVoted.length === 1 && topVoted[0] === imposter.id;
-
-  return {
-    tally,
-    imposterId: imposter ? imposter.id : null,
-    imposterName: imposter ? imposter.name : 'Unknown',
-    citizenWord,
-    imposterWord: imposter ? imposter.word : undefined,
-    citizensWin,
-  };
-}
-
-function resetRoom(code, socketId) {
-  const room = rooms.get(code);
-  if (!room) return { error: 'Room not found.' };
-  if (room.hostId !== socketId) return { error: 'Only the host can start a new round.' };
-
-  room.state = 'lobby';
-  room.currentRound = undefined;
-  room.turnIndex = 0;
-  room.clues = [];
-  room.votes = {};
-  room.players.forEach(p => { delete p.word; delete p.isImposter; });
-
-  return { room };
-}
-
-function removePlayer(socketId) {
+function removePlayer(id) {
   for (const room of rooms.values()) {
-    const index = room.players.findIndex(p => p.id === socketId);
-    if (index === -1) continue;
-
+    const index = room.players.findIndex(p => p.id === id); if (index < 0) continue;
     room.players.splice(index, 1);
-
-    if (room.players.length === 0) {
-      rooms.delete(room.code);
-      return { roomDeleted: true };
-    }
-    if (room.hostId === socketId) {
-      room.hostId = room.players[0].id;
-    }
-
-    if ((room.state === 'playing' || room.state === 'voting') && room.players.length < 3) {
-      room.state = 'lobby';
-      room.currentRound = undefined;
-      room.turnIndex = 0;
-      room.clues = [];
-      room.votes = {};
-      room.players.forEach(p => { delete p.word; delete p.isImposter; });
-      return { room, aborted: true };
-    }
-
-    if (room.state === 'playing') {
-      if (index < room.turnIndex) room.turnIndex--;
-      if (room.turnIndex >= room.players.length) {
-        room.turnIndex = 0;
-        room.currentRound = (room.currentRound || 1) + 1;
-        if (room.currentRound > room.totalRounds) {
-          room.state = 'voting';
-          room.votes = {};
-        }
-      }
-      return { room };
-    }
-
-    if (room.state === 'voting') {
-      delete room.votes[socketId];
-      const allVoted = Object.keys(room.votes).length === room.players.length;
-      if (allVoted) {
-        const results = computeResults(room);
-        room.state = 'finished';
-        return { room, results };
-      }
-      return { room };
-    }
-
-    return { room };
+    if (!room.players.length) { rooms.delete(room.code); return { roomDeleted: true }; }
+    if (room.hostId === id) room.hostId = room.players[0].id;
+    const mode = getMode(room.modeId);
+    const result = mode.engine.onPlayerRemoved(room, id, 'disconnect', { index }) || {};
+    if (room.state !== 'lobby' && room.players.length < mode.minPlayers) { mode.engine.resetForReplay(room); result.aborted = true; }
+    return { room, ...result };
   }
   return null;
 }
-
-function getRoom(code) {
-  return rooms.get(code);
-}
-
-module.exports = { createRoom, joinRoom, removePlayer, getRoom, startGame, submitClue, submitVote, setRounds, resetRoom };
+module.exports = { createRoom, joinRoom, updateSettings, startGame, gameAction, resetRoom, removePlayer, publicRoom };

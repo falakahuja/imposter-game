@@ -1,459 +1,204 @@
 const socket = io();
-
-// ---- Avatar + confetti helpers ----
-const AVATAR_COLORS = ['#FF6B6B','#4ECDC4','#FFD93D','#6C5CE7','#00B894','#FD79A8','#0984E3','#E17055'];
-function getAvatarColor(name) {
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
-  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+const games = {
+  'word-imposter': { icon: '🎭', name: 'Word Imposter', description: 'Spot the player with the different secret word.' },
+  'gif-imposter': { icon: '🎞️', name: 'GIF Imposter', description: 'Describe your secret GIF and find the odd one out.' },
+  'most-likely': { icon: '🗳️', name: 'Most Likely To', description: 'Vote for the friend who fits the prompt best.' },
+};
+const gif = id => `https://media.giphy.com/media/${id}/giphy.gif`;
+function gifMarkup(item, small = false) {
+  if (typeof item === 'string') return `<img class="${small ? 'gif-thumb' : 'gif-item'}" src="${item}" alt="GIF prompt">`;
+  return `<div class="reaction-gif ${item.hue || ''} ${small ? 'small' : ''}"><span>${item.emoji}</span><small>${item.caption}</small></div>`;
 }
-function getInitials(name) {
-  return name.trim().split(/\s+/).map(w => w[0]).slice(0, 2).join('').toUpperCase();
-}
-function avatarSpan(name) {
-  const span = document.createElement('span');
-  span.className = 'avatar';
-  span.style.background = getAvatarColor(name);
-  span.textContent = getInitials(name);
-  return span;
-}
-function launchConfetti() {
-  const canvas = document.getElementById('confetti-canvas');
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
-  canvas.style.display = 'block';
-  const ctx = canvas.getContext('2d');
-  const colors = AVATAR_COLORS;
-  const pieces = Array.from({ length: 140 }, () => ({
-    x: Math.random() * canvas.width,
-    y: -20 - Math.random() * canvas.height * 0.5,
-    size: 6 + Math.random() * 6,
-    color: colors[Math.floor(Math.random() * colors.length)],
-    speed: 2 + Math.random() * 3,
-    drift: -1 + Math.random() * 2,
-    rotation: Math.random() * 360,
-    rotSpeed: -6 + Math.random() * 12,
-  }));
-  let frame = 0;
-  function draw() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    pieces.forEach(p => {
-      p.y += p.speed; p.x += p.drift; p.rotation += p.rotSpeed;
-      ctx.save();
-      ctx.translate(p.x, p.y);
-      ctx.rotate(p.rotation * Math.PI / 180);
-      ctx.fillStyle = p.color;
-      ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size * 0.6);
-      ctx.restore();
-    });
-    frame++;
-    if (frame < 150) requestAnimationFrame(draw);
-    else canvas.style.display = 'none';
-  }
-  draw();
-}
-
-// ---- Screen elements & switching ----
-const modeSelectScreen = document.getElementById('mode-select-screen');
-const startScreen = document.getElementById('start-screen');
-const joinScreen = document.getElementById('join-screen');
-const lobbyScreen = document.getElementById('lobby-screen');
-const wordScreen = document.getElementById('word-screen');
-const votingScreen = document.getElementById('voting-screen');
-const resultsScreen = document.getElementById('results-screen');
-const localSetupScreen = document.getElementById('local-setup-screen');
-const localPassScreen = document.getElementById('local-pass-screen');
-const localAccuseScreen = document.getElementById('local-accuse-screen');
-const localResultsScreen = document.getElementById('local-results-screen');
-
-const allScreens = [
-  modeSelectScreen, startScreen, joinScreen, lobbyScreen, wordScreen,
-  votingScreen, resultsScreen, localSetupScreen, localPassScreen,
-  localAccuseScreen, localResultsScreen,
+const localGifPairs = [
+  { citizen: gif('10JhviFuU2gWD6'), imposter: gif('5VKbvrjxpVJCM') },
+  { citizen: gif('3o7TKSjRrfIPjeiVyM'), imposter: gif('j24iLwCAjAeNQgORpZ') },
+  { citizen: gif('XlKvVrcIq4qAtsTFVk'), imposter: gif('10JhviFuU2gWD6') },
+  { citizen: gif('5VKbvrjxpVJCM'), imposter: gif('3o7TKSjRrfIPjeiVyM') },
+  { citizen: gif('j24iLwCAjAeNQgORpZ'), imposter: gif('XlKvVrcIq4qAtsTFVk') },
 ];
-function switchScreen(target) {
-  allScreens.forEach(s => { s.style.display = 'none'; s.classList.remove('screen-active'); });
-  target.style.display = 'block';
-  void target.offsetWidth; // restart animation
-  target.classList.add('screen-active');
+const localPrompts = ['Who is most likely to become famous?', 'Who is most likely to survive a zombie apocalypse?', 'Who is most likely to be late to their own wedding?', 'Who is most likely to start a business?', 'Who is most likely to win a reality show?'];
+const screens = [...document.querySelectorAll('[data-screen]')];
+let historyStack = ['landing'], popping = false, selectedMode, room, privateItem;
+function show(id, push = true) { screens.forEach(s => s.style.display = s.id === id ? 'block' : 'none'); if (push && !popping && historyStack.at(-1) !== id) { historyStack.push(id); history.pushState({ screen: id }, ''); } }
+history.replaceState({ screen: 'landing' }, '');
+window.onpopstate = () => { if (historyStack.length > 1) { popping = true; historyStack.pop(); show(historyStack.at(-1), false); popping = false; } };
+document.querySelectorAll('.back-btn').forEach(b => b.onclick = () => history.back());
+function avatar(name) { const e = document.createElement('span'); e.className = 'avatar'; e.textContent = name.split(/\s+/).map(x => x[0]).join('').slice(0, 2); return e; }
+function addButton(parent, text, handler) { const b = document.createElement('button'); b.className = 'btn btn-primary'; b.textContent = text; b.onclick = handler; parent.append(b); return b; }
+function playerList(el, list, host) { el.innerHTML = ''; list.forEach(p => { const li = document.createElement('li'); li.className = 'player-card'; li.append(avatar(p.name), Object.assign(document.createElement('span'), { className: 'player-name', textContent: p.name })); if (p.id === host) li.append(Object.assign(document.createElement('span'), { className: 'badge-host', textContent: 'HOST' })); el.append(li); }); }
+
+const cards = document.querySelector('#game-cards');
+Object.entries(games).forEach(([id, game]) => { const b = document.createElement('button'); b.className = 'game-card'; b.innerHTML = `<span class="game-icon">${game.icon}</span><strong>${game.name}</strong><small>${game.description}</small>`; b.onclick = () => { selectedMode = id; document.querySelector('#method-title').textContent = game.name; document.querySelector('#method-description').textContent = game.description; document.querySelector('#local-btn').style.display = 'block'; document.querySelector('#local-note').textContent = ''; show('method'); }; cards.append(b); });
+document.querySelector('#online-btn').onclick = () => show('start');
+document.querySelector('#local-btn').onclick = () => openLocalSetup();
+document.querySelector('#create').onclick = () => { const name = document.querySelector('#name').value.trim(); if (!name) return alert('Enter your name.'); socket.emit('create-room', { name, modeId: selectedMode }); };
+document.querySelector('#show-join').onclick = () => show('join');
+document.querySelector('#join').onclick = () => socket.emit('join-room', { code: document.querySelector('#code').value.trim(), name: document.querySelector('#name').value.trim() });
+
+function lobby(r) { room = r; document.querySelector('#room-code').textContent = r.code; playerList(document.querySelector('#players'), r.players, r.hostId); const host = r.hostId === socket.id; const usesRounds = r.modeId !== 'most-likely'; document.querySelector('#settings').style.display = host && usesRounds ? 'block' : 'none'; document.querySelector('#start-game').style.display = host ? 'block' : 'none'; document.querySelector('#rounds').value = r.settings.rounds; show('lobby'); }
+socket.on('room-joined', lobby); socket.on('room-updated', lobby); socket.on('room-reset', lobby);
+socket.on('join-error', x => document.querySelector('#join-error').textContent = x.message); socket.on('start-error', x => document.querySelector('#start-error').textContent = x.message);
+document.querySelector('#rounds').onchange = e => socket.emit('update-settings', { code: room.code, settings: { rounds: e.target.value } });
+document.querySelector('#start-game').onclick = () => socket.emit('start-game', { code: room.code });
+socket.on('game-private', x => privateItem = x);
+function action(actionName, payload = {}) { socket.emit('game-action', { code: room.code, action: actionName, payload }); }
+function gameState(s) {
+  show('play'); const imposter = s.kind === 'imposter'; const reveal = document.querySelector('#private-reveal'); reveal.style.display = imposter ? 'block' : 'none';
+  if (imposter && privateItem) { document.querySelector('#private-label').textContent = `Your ${privateItem.label}`; const item = document.querySelector('#private-item'); if (privateItem.label === 'gif') item.innerHTML = `<img class="gif-item" src="${privateItem.item}" alt="Your secret GIF">`; else item.textContent = privateItem.item; }
+  const title = document.querySelector('#play-title'), status = document.querySelector('#play-status'), area = document.querySelector('#action-area'), feed = document.querySelector('#feed'); area.innerHTML = ''; feed.innerHTML = '';
+  if (imposter) {
+    title.textContent = s.phase === 'voting' ? "Who's the imposter?" : `Round ${s.currentRound} of ${s.totalRounds}`;
+    if (s.phase === 'playing') { status.textContent = s.currentPlayerId === socket.id ? "It's your turn — give one word." : `Waiting for ${room.players.find(p => p.id === s.currentPlayerId)?.name || 'a player'}…`; if (s.currentPlayerId === socket.id) { const input = Object.assign(document.createElement('input'), { className: 'input-field', placeholder: 'One-word clue' }); area.append(input); addButton(area, 'Submit clue', () => action('clue', { clue: input.value })); } s.clues.forEach(c => { const li = document.createElement('li'); li.className = 'player-card'; li.textContent = `${c.playerName}: “${c.clue}”`; feed.append(li); }); }
+    else { status.textContent = `${s.votesSoFar} of ${s.totalPlayers} voted`; room.players.forEach(p => addButton(area, `Vote: ${p.name}`, () => action('vote', { votedForId: p.id }))); }
+  } else { title.textContent = `Prompt ${s.round} of ${s.totalRounds}`; status.textContent = s.prompt; if (s.phase === 'picking') { document.querySelector('#feed-title').textContent = 'Pick one other player'; room.players.filter(p => p.id !== socket.id).forEach(p => addButton(area, p.name, () => action('pick', { playerId: p.id }))); } else { document.querySelector('#feed-title').textContent = 'Discussion time'; status.textContent = 'Make your case, defend yourself, and have a laugh.'; if (room.hostId === socket.id) addButton(area, s.round >= s.totalRounds ? 'End session' : 'Next prompt', () => action('next-round')); } }
 }
+socket.on('game-state', gameState); socket.on('game-error', x => alert(x.message)); socket.on('game-aborted', x => { alert(x.message); lobby(x.room); });
+socket.on('game-results', r => { show('results'); const social = r.kind === 'most-likely-results', host = room.hostId === socket.id; document.querySelector('#result-card').className = 'results-card ' + (!social && r.citizensWin ? 'win' : 'lose'); document.querySelector('#result-title').textContent = social ? 'The picks are in!' : r.citizensWin ? '🎉 Citizens win!' : '🕵️ Imposter wins!'; document.querySelector('#result-subtitle').textContent = social ? r.prompt : `${r.imposterName} was the imposter`; const items = document.querySelector('#result-items'); items.innerHTML = ''; if (!social) items.innerHTML = `<div class="word-chip"><span class="word-chip-label">Citizen ${r.label}</span><span class="word-chip-value">${r.label === 'gif' ? `<img class="gif-thumb" src="${r.citizenItem}">` : r.citizenItem}</span></div><div class="word-chip word-chip-imposter"><span class="word-chip-label">Imposter ${r.label}</span><span class="word-chip-value">${r.label === 'gif' ? `<img class="gif-thumb" src="${r.imposterItem}">` : r.imposterItem}</span></div>`; const tally = document.querySelector('#tally'); tally.innerHTML = ''; room.players.forEach(p => { const li = document.createElement('li'); li.className = 'player-card'; li.textContent = `${p.name} — ${r.tally[p.id] || 0} pick${r.tally[p.id] === 1 ? '' : 's'}`; tally.append(li); }); const cont = document.querySelector('#continue'); cont.style.display = host ? 'block' : 'none'; cont.textContent = social ? 'Next prompt' : 'Play Again'; cont.onclick = () => social ? action('next-round') : socket.emit('play-again', { code: room.code }); document.querySelector('#waiting').textContent = host ? (social ? 'Discuss, then continue when ready.' : '') : 'Waiting for the host to continue.'; });
+socket.on('session-complete', () => document.querySelector('#result-subtitle').textContent = 'That was the final prompt. Thanks for playing!');
 
-// ---- Element refs ----
-const nameInput = document.getElementById('name-input');
-const codeInput = document.getElementById('code-input');
-const errorMsg = document.getElementById('error-msg');
-const roomCodeDisplay = document.getElementById('room-code-display');
-const playerList = document.getElementById('player-list');
-const copyCodeBtn = document.getElementById('copy-code-btn');
-const abortBanner = document.getElementById('abort-banner');
-const roundsControl = document.getElementById('rounds-control');
-const roundsSelect = document.getElementById('rounds-select');
-const roundsDisplay = document.getElementById('rounds-display');
-const startBtn = document.getElementById('start-btn');
-const startError = document.getElementById('start-error');
-
-const wordDisplay = document.getElementById('word-display');
-const roundDots = document.getElementById('round-dots');
-const roundDisplay = document.getElementById('round-display');
-const turnDisplay = document.getElementById('turn-display');
-const clueInputArea = document.getElementById('clue-input-area');
-const clueInput = document.getElementById('clue-input');
-const submitClueBtn = document.getElementById('submit-clue-btn');
-const clueError = document.getElementById('clue-error');
-const clueList = document.getElementById('clue-list');
-
-const voteProgressDisplay = document.getElementById('vote-progress-display');
-const voteOptions = document.getElementById('vote-options');
-const voteError = document.getElementById('vote-error');
-
-const resultsCardInner = document.getElementById('results-card-inner');
-const resultsHeadline = document.getElementById('results-headline');
-const resultsSubtext = document.getElementById('results-subtext');
-const resultsCitizenWord = document.getElementById('results-citizen-word');
-const resultsImposterWord = document.getElementById('results-imposter-word');
-const resultsTally = document.getElementById('results-tally');
-const playAgainBtn = document.getElementById('play-again-btn');
-const playAgainWaiting = document.getElementById('play-again-waiting');
-
-let currentRoomCode = null;
-let isHost = false;
-let players = [];
-
-// ---- Mode selection ----
-document.getElementById('mode-online-btn').addEventListener('click', () => switchScreen(startScreen));
-document.getElementById('mode-local-btn').addEventListener('click', () => switchScreen(localSetupScreen));
-
-// ---- Create / join ----
-document.getElementById('create-btn').addEventListener('click', () => {
-  const name = nameInput.value.trim();
-  if (!name) return alert('Enter a name first.');
-  socket.emit('create-room', { name });
-});
-
-document.getElementById('show-join-btn').addEventListener('click', () => switchScreen(joinScreen));
-
-document.getElementById('join-btn').addEventListener('click', () => {
-  const name = nameInput.value.trim();
-  const code = codeInput.value.trim();
-  if (!name) return alert('Enter a name first.');
-  if (!code) return alert('Enter a room code.');
-  socket.emit('join-room', { code, name });
-});
-
-copyCodeBtn.addEventListener('click', () => {
-  navigator.clipboard.writeText(currentRoomCode).then(() => {
-    const original = copyCodeBtn.textContent;
-    copyCodeBtn.textContent = 'Copied!';
-    copyCodeBtn.classList.add('copied');
-    setTimeout(() => { copyCodeBtn.textContent = original; copyCodeBtn.classList.remove('copied'); }, 1500);
-  });
-});
-
-socket.on('room-joined', (room) => showLobby(room));
-socket.on('room-updated', (room) => showLobby(room));
-socket.on('join-error', ({ message }) => { errorMsg.textContent = message; });
-
-function showLobby(room) {
-  currentRoomCode = room.code;
-  isHost = room.hostId === socket.id;
-  players = room.players.map(p => ({ id: p.id, name: p.name }));
-
-  switchScreen(lobbyScreen);
-  abortBanner.style.display = 'none';
-  roomCodeDisplay.textContent = room.code;
-  startBtn.style.display = isHost ? 'block' : 'none';
-  startError.textContent = '';
-
-  roundsControl.style.display = isHost ? 'block' : 'none';
-  roundsSelect.value = room.totalRounds || 2;
-  roundsDisplay.textContent = isHost ? '' : `Rounds: ${room.totalRounds || 2}`;
-  roundsDisplay.style.display = isHost ? 'none' : 'block';
-
-  playerList.innerHTML = '';
-  room.players.forEach((p) => {
-    const li = document.createElement('li');
-    li.className = 'player-card';
-    li.appendChild(avatarSpan(p.name));
-    const nameSpan = document.createElement('span');
-    nameSpan.className = 'player-name';
-    nameSpan.textContent = p.name;
-    li.appendChild(nameSpan);
-    if (p.id === room.hostId) {
-      const badge = document.createElement('span');
-      badge.className = 'badge-host';
-      badge.textContent = 'HOST';
-      li.appendChild(badge);
-    }
-    playerList.appendChild(li);
-  });
-}
-
-roundsSelect.addEventListener('change', () => {
-  socket.emit('set-rounds', { code: currentRoomCode, rounds: roundsSelect.value });
-});
-
-startBtn.addEventListener('click', () => {
-  socket.emit('start-game', { code: currentRoomCode });
-});
-socket.on('start-error', ({ message }) => { startError.textContent = message; });
-
-// ---- Game start / clues ----
-socket.on('your-word', ({ word }) => { wordDisplay.textContent = word; });
-
-socket.on('game-started', (data) => {
-  players = data.players;
-  switchScreen(wordScreen);
-  clueList.innerHTML = '';
-  updateTurnUI(data.currentPlayerId, data.currentRound, data.totalRounds);
-});
-
-function getPlayerName(id) {
-  const p = players.find((player) => player.id === id);
-  return p ? p.name : 'someone';
-}
-
-function renderRoundDots(round, total) {
-  roundDots.innerHTML = '';
-  for (let i = 1; i <= total; i++) {
-    const dot = document.createElement('span');
-    dot.className = 'round-dot';
-    if (i < round) dot.classList.add('done');
-    if (i === round) dot.classList.add('active');
-    roundDots.appendChild(dot);
+let localNames = [], localGame = null, localIndex = 0, localPicks = {}, localPromptIndex = 0;
+const localList = document.querySelector('#local-players');
+function openLocalSetup() { localNames = []; renderLocalNames(); const game = games[selectedMode]; document.querySelector('#local-setup-title').textContent = `${game.name} — Pass & Play`; document.querySelector('#local-setup-description').textContent = selectedMode === 'most-likely' ? 'Add 3 or more players. Each person privately makes one pick, then the group finds the question imposter.' : 'Add 3 or more players, then pass the device around for private reveals.'; document.querySelector('#local-rounds-wrap').style.display = 'none'; show('local-setup'); }
+function renderLocalNames() { localList.innerHTML = ''; localNames.forEach((name, i) => { const li = document.createElement('li'); li.className = 'player-card'; li.append(avatar(name), Object.assign(document.createElement('span'), { className: 'player-name', textContent: name })); const remove = document.createElement('button'); remove.className = 'btn-ghost'; remove.textContent = 'Remove'; remove.onclick = () => { localNames.splice(i, 1); renderLocalNames(); }; li.append(remove); localList.append(li); }); }
+document.querySelector('#local-add').onclick = () => { const name = document.querySelector('#local-name').value.trim(); if (!name) return; localNames.push(name); document.querySelector('#local-name').value = ''; renderLocalNames(); };
+document.querySelector('#local-name').onkeydown = e => { if (e.key === 'Enter') document.querySelector('#local-add').click(); };
+document.querySelector('#local-start').onclick = () => { if (localNames.length < 3) return alert('Add at least 3 players.'); localIndex = 0; localPromptIndex = 0; if (selectedMode === 'most-likely') { localGame = { mode: selectedMode, players: localNames.map(name => ({ name })), totalRounds: Number(document.querySelector('#local-rounds').value) }; startLocalPrompt(); } else { const pair = selectedMode === 'word-imposter' ? WordPairs.getRandomPair() : localGifPairs[Math.floor(Math.random() * localGifPairs.length)]; const imposter = Math.floor(Math.random() * localNames.length); localGame = { mode: selectedMode, pair, players: localNames.map((name, i) => ({ name, isImposter: i === imposter, item: i === imposter ? pair.imposter : pair.citizen })) }; localPass(); } };
+function localPass() { const player = localGame.players[localIndex], isGif = localGame.mode === 'gif-imposter'; show('local-pass'); document.querySelector('#local-person').textContent = `Pass the device to ${player.name}`; document.querySelector('#local-reveal-prompt').textContent = `Tap to reveal your ${isGif ? 'GIF' : 'word'}`; const item = document.querySelector('#local-word'); item.innerHTML = ''; item.textContent = ''; document.querySelector('#local-choice').innerHTML = ''; document.querySelector('#local-next').style.display = 'none'; document.querySelector('#local-reveal').onclick = () => { if (isGif) item.innerHTML = `<img class="gif-item" src="${player.item}" alt="Your secret GIF">`; else item.textContent = player.item; document.querySelector('#local-next').style.display = 'block'; }; }
+document.querySelector('#local-next').onclick = () => { localIndex++; if (localIndex < localGame.players.length) localPass(); else localImposterVote(); };
+function localImposterVote() { show('local-vote'); document.querySelector('#local-vote-title').textContent = 'Discuss, then pick the imposter'; document.querySelector('#local-vote-subtitle').textContent = 'Choose the group’s final accusation.'; const votes = document.querySelector('#local-votes'); votes.innerHTML = ''; localGame.players.forEach((p, index) => addButton(votes, p.name, () => showLocalImposterResult(index))); }
+function showLocalImposterResult(accused) { const imposter = localGame.players.findIndex(p => p.isImposter), won = accused === imposter; show('local-result'); document.querySelector('#local-result-card').className = `results-card ${won ? 'win' : 'lose'}`; document.querySelector('#local-result-title').textContent = won ? '🎉 Citizens win!' : '🕵️ Imposter wins!'; document.querySelector('#local-result-text').textContent = `${localGame.players[imposter].name} was the imposter.`; const items = document.querySelector('#local-result-items'); items.innerHTML = ''; const citizen = localGame.players.find(p => !p.isImposter).item; if (localGame.mode === 'gif-imposter') items.innerHTML = `<div class="word-chip"><span class="word-chip-label">Citizen GIF</span><img class="gif-thumb" src="${citizen}"></div><div class="word-chip word-chip-imposter"><span class="word-chip-label">Imposter GIF</span><img class="gif-thumb" src="${localGame.players[imposter].item}"></div>`; else items.innerHTML = `<div class="word-chip"><span class="word-chip-label">Citizen word</span><span class="word-chip-value">${citizen}</span></div><div class="word-chip word-chip-imposter"><span class="word-chip-label">Imposter word</span><span class="word-chip-value">${localGame.players[imposter].item}</span></div>`; document.querySelector('#local-tally').innerHTML = ''; document.querySelector('#local-again').textContent = 'New Game'; document.querySelector('#local-again').onclick = openLocalSetup; }
+function startLocalPrompt() { localIndex = 0; localPicks = {}; localGame.prompt = localPrompts[localPromptIndex++ % localPrompts.length]; localMostLikelyPass(); }
+function localMostLikelyPass() { const player = localGame.players[localIndex]; show('local-pass'); document.querySelector('#local-person').textContent = `Pass the device to ${player.name}`; document.querySelector('#local-reveal-prompt').textContent = 'Tap to make your private pick'; document.querySelector('#local-word').textContent = ''; document.querySelector('#local-choice').innerHTML = ''; document.querySelector('#local-next').style.display = 'none'; document.querySelector('#local-reveal').onclick = () => { document.querySelector('#local-word').textContent = localGame.prompt; const choices = document.querySelector('#local-choice'); choices.innerHTML = ''; localGame.players.filter(p => p.name !== player.name).forEach(p => addButton(choices, p.name, () => { localPicks[player.name] = p.name; localIndex++; if (localIndex < localGame.players.length) localMostLikelyPass(); else showLocalPromptResults(); })); }; }
+function showLocalPromptResults() { show('local-result'); const tally = Object.fromEntries(localGame.players.map(p => [p.name, 0])); Object.values(localPicks).forEach(name => tally[name]++); document.querySelector('#local-result-card').className = 'results-card win'; document.querySelector('#local-result-title').textContent = 'The picks are in!'; document.querySelector('#local-result-text').textContent = `${localGame.prompt} Discuss the results, then continue when ready.`; document.querySelector('#local-result-items').innerHTML = ''; const list = document.querySelector('#local-tally'); list.innerHTML = ''; localGame.players.forEach(p => { const li = document.createElement('li'); li.className = 'player-card'; li.textContent = `${p.name} — ${tally[p.name]} pick${tally[p.name] === 1 ? '' : 's'}`; list.append(li); }); const next = document.querySelector('#local-again'); const final = localPromptIndex >= localGame.totalRounds; next.textContent = final ? 'New Game' : 'Next prompt'; next.onclick = final ? openLocalSetup : startLocalPrompt; }
+// Most Likely To is an imposter game: answers are revealed before the group votes.
+function gameState(s) {
+  show('play');
+  const isImposter = s.kind === 'imposter';
+  const isQuestionImposter = s.kind === 'most-likely-imposter';
+  const reveal = document.querySelector('#private-reveal');
+  reveal.style.display = (isImposter || isQuestionImposter) ? 'block' : 'none';
+  if ((isImposter || isQuestionImposter) && privateItem) {
+    document.querySelector('#private-label').textContent = `Your ${privateItem.label}`;
+    const item = document.querySelector('#private-item');
+    if (privateItem.label === 'gif') item.innerHTML = gifMarkup(privateItem.item);
+    else item.textContent = privateItem.item;
+  }
+  const title = document.querySelector('#play-title'), status = document.querySelector('#play-status'), area = document.querySelector('#action-area'), feed = document.querySelector('#feed'), feedTitle = document.querySelector('#feed-title');
+  area.innerHTML = ''; feed.innerHTML = ''; feedTitle.textContent = '';
+  if (isImposter) {
+    title.textContent = s.phase === 'voting' ? "Who's the imposter?" : `Round ${s.currentRound} of ${s.totalRounds}`;
+    if (s.phase === 'playing') {
+      status.textContent = s.currentPlayerId === socket.id ? "It's your turn — give one word." : `Waiting for ${room.players.find(p => p.id === s.currentPlayerId)?.name || 'a player'}…`;
+      if (s.currentPlayerId === socket.id) { const input = Object.assign(document.createElement('input'), { className: 'input-field', placeholder: 'One-word clue' }); area.append(input); addButton(area, 'Submit clue', () => action('clue', { clue: input.value })); }
+      s.clues.forEach(c => { const li = document.createElement('li'); li.className = 'player-card'; li.textContent = `${c.playerName}: “${c.clue}”`; feed.append(li); });
+    } else { status.textContent = `${s.votesSoFar} of ${s.totalPlayers} voted`; room.players.forEach(p => addButton(area, `Vote: ${p.name}`, () => action('vote', { votedForId: p.id }))); }
+    return;
+  }
+  if (!isQuestionImposter) return;
+  title.textContent = `Question round ${s.round} of ${s.totalRounds}`;
+  if (s.phase === 'picking') {
+    status.textContent = `${s.picksSoFar} of ${s.totalPlayers} answers submitted`;
+    feedTitle.textContent = 'Choose the player who best fits your question';
+    room.players.forEach(p => addButton(area, p.name, () => action('pick', { playerId: p.id })));
+  } else if (s.phase === 'discussion') {
+    status.textContent = 'Compare the answers. Who had the different question?';
+    feedTitle.textContent = 'Everyone’s answers';
+    renderAnswerList(feed, s.answers);
+    if (room.hostId === socket.id) addButton(area, 'Start imposter vote', () => action('start-vote'));
+  } else if (s.phase === 'voting') {
+    status.textContent = `${s.votesSoFar} of ${s.totalPlayers} voted — vote out the question imposter.`;
+    room.players.forEach(p => addButton(area, `Vote: ${p.name}`, () => action('vote', { playerId: p.id })));
+    feedTitle.textContent = 'Everyone’s answers'; renderAnswerList(feed, s.answers);
   }
 }
+function renderAnswerList(list, answers) {
+  const totals = Object.fromEntries(room.players.map(player => [player.id, 0]));
+  answers.forEach(answer => { totals[answer.pickedId] = (totals[answer.pickedId] || 0) + 1; });
+  answers.forEach(answer => {
+    const from = room.players.find(player => player.id === answer.playerId)?.name || 'Someone';
+    const picked = room.players.find(player => player.id === answer.pickedId)?.name || 'someone';
+    const li = document.createElement('li'); li.className = 'player-card answer-row';
+    li.append(document.createTextNode(`${from} picked `), Object.assign(document.createElement('strong'), { className: 'answer-target', textContent: picked }));
+    const count = document.createElement('span'); count.className = 'answer-count'; count.textContent = `${totals[answer.pickedId]} pick${totals[answer.pickedId] === 1 ? '' : 's'}`; li.append(count); list.append(li);
+  });
+}
 
-function updateTurnUI(currentPlayerId, round, totalRounds) {
-  renderRoundDots(round, totalRounds);
-  roundDisplay.textContent = `Round ${round} of ${totalRounds}`;
-  if (currentPlayerId === socket.id) {
-    turnDisplay.textContent = "It's your turn!";
-    clueInputArea.style.display = 'block';
-    clueInput.focus();
-  } else {
-    turnDisplay.textContent = `Waiting for ${getPlayerName(currentPlayerId)}…`;
-    clueInputArea.style.display = 'none';
+// Replace the old results listener so the question-imposter round has its own reveal.
+socket.off('game-results');
+socket.on('game-results', r => {
+  show('results'); const questionImposter = r.kind === 'most-likely-imposter-results', host = room.hostId === socket.id;
+  document.querySelector('#result-card').className = 'results-card ' + (r.citizensWin ? 'win' : 'lose');
+  document.querySelector('#result-title').textContent = r.citizensWin ? '🎉 Group found the imposter!' : '🕵️ The imposter blended in!';
+  document.querySelector('#result-subtitle').textContent = questionImposter ? `${r.imposterName} had the different question.` : `${r.imposterName} was the imposter.`;
+  const items = document.querySelector('#result-items'); items.innerHTML = '';
+  if (questionImposter) items.innerHTML = `<div class="word-chip"><span class="word-chip-label">Group question</span><span class="word-chip-value">${r.citizenQuestion}</span></div><div class="word-chip word-chip-imposter"><span class="word-chip-label">Imposter question</span><span class="word-chip-value">${r.imposterQuestion}</span></div>`;
+  else items.innerHTML = `<div class="word-chip"><span class="word-chip-label">Citizen ${r.label}</span><span class="word-chip-value">${r.label === 'gif' ? gifMarkup(r.citizenItem, true) : r.citizenItem}</span></div><div class="word-chip word-chip-imposter"><span class="word-chip-label">Imposter ${r.label}</span><span class="word-chip-value">${r.label === 'gif' ? gifMarkup(r.imposterItem, true) : r.imposterItem}</span></div>`;
+  const tally = document.querySelector('#tally'); tally.innerHTML = ''; room.players.forEach(p => { const li = document.createElement('li'); li.className = 'player-card'; li.textContent = `${p.name} — ${r.tally[p.id] || 0} vote${r.tally[p.id] === 1 ? '' : 's'}`; tally.append(li); });
+  if (questionImposter) { const answerHeading = document.createElement('h3'); answerHeading.textContent = 'Answers'; tally.before(answerHeading); const answers = document.createElement('ul'); answers.className = 'player-list'; renderAnswerList(answers, r.answers); answerHeading.after(answers); }
+  const cont = document.querySelector('#continue'); cont.style.display = host ? 'block' : 'none'; cont.textContent = 'Next game'; cont.onclick = () => socket.emit('play-again', { code: room.code });
+  const choose = document.querySelector('#choose-game'); choose.style.display = 'block'; choose.onclick = () => show('landing'); document.querySelector('#waiting').textContent = host ? '' : 'Waiting for the host to start the next game.';
+});
+
+const localPromptPairs = [
+  { citizen: 'Who is most likely to become famous?', imposter: 'Who is most likely to become a millionaire?' },
+  { citizen: 'Who is most likely to survive a zombie apocalypse?', imposter: 'Who is most likely to survive alone in the wilderness?' },
+  { citizen: 'Who is most likely to be late to their own wedding?', imposter: 'Who is most likely to forget an important birthday?' },
+  { citizen: 'Who is most likely to start a business?', imposter: 'Who is most likely to quit their job and travel the world?' },
+  { citizen: 'Who is most likely to laugh at the worst possible moment?', imposter: 'Who is most likely to tell a terrible joke with confidence?' },
+  { citizen: 'Who is most likely to become a meme?', imposter: 'Who is most likely to have a viral dance?' },
+  { citizen: 'Who is most likely to order dessert first?', imposter: 'Who is most likely to steal fries from everyone else?' },
+  { citizen: 'Who is most likely to get lost in their own neighborhood?', imposter: 'Who is most likely to miss a flight?' },
+  { citizen: 'Who is most likely to survive a haunted house?', imposter: 'Who is most likely to scream first in a horror film?' },
+  { citizen: 'Who is most likely to start a dance party?', imposter: 'Who is most likely to sing karaoke without being asked?' },
+  { citizen: 'Who is most likely to adopt too many pets?', imposter: 'Who is most likely to name every stray animal they see?' },
+];
+function startLocalPrompt() {
+  localIndex = 0; localPicks = {}; const pair = localPromptPairs[localPromptIndex++ % localPromptPairs.length]; const imposterIndex = Math.floor(Math.random() * localGame.players.length);
+  localGame.pair = pair; localGame.imposterIndex = imposterIndex; localGame.players.forEach((player, index) => player.question = index === imposterIndex ? pair.imposter : pair.citizen); localMostLikelyPass();
+}
+function localMostLikelyPass() {
+  const player = localGame.players[localIndex]; show('local-pass'); document.querySelector('#local-person').textContent = `Pass the device to ${player.name}`; document.querySelector('#local-reveal-prompt').textContent = 'Tap to reveal your private question'; document.querySelector('#local-word').textContent = ''; const choices = document.querySelector('#local-choice'); choices.innerHTML = ''; document.querySelector('#local-next').style.display = 'none';
+  document.querySelector('#local-reveal').onclick = () => { document.querySelector('#local-word').textContent = player.question; choices.innerHTML = ''; localGame.players.forEach(p => addButton(choices, p.name, () => { localPicks[player.name] = p.name; localIndex++; if (localIndex < localGame.players.length) localMostLikelyPass(); else showLocalPromptResults(); })); };
+}
+function renderLocalAnswerList(list) {
+  const totals = Object.fromEntries(localGame.players.map(player => [player.name, 0])); Object.values(localPicks).forEach(name => totals[name]++);
+  localGame.players.forEach(player => { const picked = localPicks[player.name]; const li = document.createElement('li'); li.className = 'player-card answer-row'; li.append(document.createTextNode(`${player.name} picked `), Object.assign(document.createElement('strong'), { className: 'answer-target', textContent: picked })); const count = document.createElement('span'); count.className = 'answer-count'; count.textContent = `${totals[picked]} pick${totals[picked] === 1 ? '' : 's'}`; li.append(count); list.append(li); });
+}
+function showLocalPromptResults() {
+  show('local-result'); document.querySelector('#local-result-card').className = 'results-card win'; document.querySelector('#local-result-title').textContent = 'Answers revealed'; document.querySelector('#local-result-text').textContent = 'Discuss the answers, then vote out the player with the different question.'; document.querySelector('#local-result-items').innerHTML = ''; const list = document.querySelector('#local-tally'); list.innerHTML = ''; renderLocalAnswerList(list); const vote = document.querySelector('#local-again'); vote.textContent = 'Vote out the imposter'; vote.onclick = localQuestionImposterVote;
+}
+function localQuestionImposterVote() { show('local-vote'); document.querySelector('#local-vote-title').textContent = 'Who had the different question?'; document.querySelector('#local-vote-subtitle').textContent = 'Agree on one player to vote out.'; const votes = document.querySelector('#local-votes'); votes.innerHTML = ''; localGame.players.forEach((p, index) => addButton(votes, p.name, () => showLocalQuestionResult(index))); }
+function showLocalQuestionResult(accused) { const imposter = localGame.imposterIndex, won = accused === imposter; show('local-result'); document.querySelector('#local-result-card').className = `results-card ${won ? 'win' : 'lose'}`; document.querySelector('#local-result-title').textContent = won ? '🎉 Group found the imposter!' : '🕵️ The imposter blended in!'; document.querySelector('#local-result-text').textContent = `${localGame.players[imposter].name} had the different question.`; document.querySelector('#local-result-items').innerHTML = `<div class="word-chip"><span class="word-chip-label">Group question</span><span class="word-chip-value">${localGame.pair.citizen}</span></div><div class="word-chip word-chip-imposter"><span class="word-chip-label">Imposter question</span><span class="word-chip-value">${localGame.pair.imposter}</span></div>`; const list = document.querySelector('#local-tally'); list.innerHTML = ''; renderLocalAnswerList(list); const next = document.querySelector('#local-again'); next.textContent = 'Choose another game'; next.onclick = () => show('landing'); }
+
+function restartLocalGame() {
+  localIndex = 0; localPromptIndex = 0;
+  if (selectedMode === 'most-likely') {
+    localGame = { mode: selectedMode, players: localNames.map(name => ({ name })), totalRounds: 1 };
+    startLocalPrompt();
+    return;
   }
+  const pair = selectedMode === 'word-imposter' ? WordPairs.getRandomPair() : localGifPairs[Math.floor(Math.random() * localGifPairs.length)];
+  const imposter = Math.floor(Math.random() * localNames.length);
+  localGame = { mode: selectedMode, pair, players: localNames.map((name, i) => ({ name, isImposter: i === imposter, item: i === imposter ? pair.imposter : pair.citizen })) };
+  localPass();
 }
-
-function renderClues(clues) {
-  clueList.innerHTML = '';
-  clues.forEach((c) => {
-    const li = document.createElement('li');
-    li.className = 'player-card';
-    li.appendChild(avatarSpan(c.playerName));
-    const span = document.createElement('span');
-    span.className = 'player-name';
-    span.textContent = `${c.playerName}: "${c.clue}"`;
-    li.appendChild(span);
-    clueList.appendChild(li);
-  });
+function showLocalImposterResult(accused) {
+  const imposter = localGame.players.findIndex(p => p.isImposter), won = accused === imposter; show('local-result'); document.querySelector('#local-result-card').className = `results-card ${won ? 'win' : 'lose'}`; document.querySelector('#local-result-title').textContent = won ? '🎉 Citizens win!' : '🕵️ Imposter wins!'; document.querySelector('#local-result-text').textContent = `${localGame.players[imposter].name} was the imposter.`; const items = document.querySelector('#local-result-items'); const citizen = localGame.players.find(p => !p.isImposter).item; items.innerHTML = localGame.mode === 'gif-imposter' ? `<div class="word-chip"><span class="word-chip-label">Citizen GIF</span><img class="gif-thumb" src="${citizen}"></div><div class="word-chip word-chip-imposter"><span class="word-chip-label">Imposter GIF</span><img class="gif-thumb" src="${localGame.players[imposter].item}"></div>` : `<div class="word-chip"><span class="word-chip-label">Citizen word</span><span class="word-chip-value">${citizen}</span></div><div class="word-chip word-chip-imposter"><span class="word-chip-label">Imposter word</span><span class="word-chip-value">${localGame.players[imposter].item}</span></div>`; document.querySelector('#local-tally').innerHTML = ''; document.querySelector('#local-again').textContent = 'Next game'; document.querySelector('#local-again').onclick = restartLocalGame; const choose = document.querySelector('#local-choose-game'); choose.style.display = 'block'; choose.onclick = () => show('landing');
 }
-
-submitClueBtn.addEventListener('click', () => {
-  const clue = clueInput.value.trim();
-  if (!clue) return;
-  socket.emit('submit-clue', { code: currentRoomCode, clue });
-  clueInput.value = '';
-});
-clueInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitClueBtn.click(); });
-
-socket.on('clue-error', ({ message }) => { clueError.textContent = message; });
-
-socket.on('clue-submitted', (data) => {
-  clueError.textContent = '';
-  renderClues(data.clues);
-  if (data.gameComplete) {
-    switchScreen(votingScreen);
-    showVotingScreen();
-  } else {
-    updateTurnUI(data.currentPlayerId, data.currentRound, data.totalRounds);
-  }
-});
-
-// ---- Voting ----
-function showVotingScreen() {
-  voteError.textContent = '';
-  voteProgressDisplay.textContent = `0 of ${players.length} voted`;
-  voteOptions.innerHTML = '';
-  players.forEach((p) => {
-    const card = document.createElement('button');
-    card.className = 'vote-card';
-    card.appendChild(avatarSpan(p.name));
-    const label = document.createElement('div');
-    label.textContent = p.name;
-    card.appendChild(label);
-    card.addEventListener('click', () => {
-      socket.emit('submit-vote', { code: currentRoomCode, votedForId: p.id });
-      voteOptions.querySelectorAll('button').forEach(b => b.disabled = true);
-      card.style.boxShadow = '0 0 0 2px var(--accent)';
-    });
-    voteOptions.appendChild(card);
-  });
+function showLocalQuestionResult(accused) {
+  const imposter = localGame.imposterIndex, won = accused === imposter; show('local-result'); document.querySelector('#local-result-card').className = `results-card ${won ? 'win' : 'lose'}`; document.querySelector('#local-result-title').textContent = won ? '🎉 Group found the imposter!' : '🕵️ The imposter blended in!'; document.querySelector('#local-result-text').textContent = `${localGame.players[imposter].name} had the different question.`; document.querySelector('#local-result-items').innerHTML = `<div class="word-chip"><span class="word-chip-label">Group question</span><span class="word-chip-value">${localGame.pair.citizen}</span></div><div class="word-chip word-chip-imposter"><span class="word-chip-label">Imposter question</span><span class="word-chip-value">${localGame.pair.imposter}</span></div>`; const list = document.querySelector('#local-tally'); list.innerHTML = ''; renderLocalAnswerList(list); document.querySelector('#local-again').textContent = 'Next game'; document.querySelector('#local-again').onclick = restartLocalGame; const choose = document.querySelector('#local-choose-game'); choose.style.display = 'block'; choose.onclick = () => show('landing');
 }
-
-socket.on('vote-error', ({ message }) => { voteError.textContent = message; });
-socket.on('vote-progress', ({ votesSoFar, totalPlayers }) => {
-  voteProgressDisplay.textContent = `${votesSoFar} of ${totalPlayers} voted`;
-});
-
-socket.on('game-results', (results) => {
-  switchScreen(resultsScreen);
-  resultsCardInner.className = 'results-card ' + (results.citizensWin ? 'win' : 'lose');
-  resultsHeadline.textContent = results.citizensWin ? '🎉 Citizens win!' : '🕵️ Imposter wins!';
-  resultsSubtext.textContent = `${results.imposterName} was the imposter`;
-  resultsCitizenWord.textContent = results.citizenWord;
-  resultsImposterWord.textContent = results.imposterWord;
-
-  resultsTally.innerHTML = '';
-  players.forEach((p) => {
-    const li = document.createElement('li');
-    li.className = 'results-tally-item';
-    li.appendChild(avatarSpan(p.name));
-    const voteCount = results.tally[p.id] || 0;
-    const tag = p.id === results.imposterId ? ' 🎭 (imposter)' : '';
-    const span = document.createElement('span');
-    span.textContent = `${p.name}${tag} — ${voteCount} vote(s)`;
-    li.appendChild(span);
-    resultsTally.appendChild(li);
-  });
-
-  playAgainBtn.style.display = isHost ? 'block' : 'none';
-  playAgainWaiting.style.display = isHost ? 'none' : 'block';
-
-  if (results.citizensWin) launchConfetti();
-});
-
-playAgainBtn.addEventListener('click', () => {
-  socket.emit('play-again', { code: currentRoomCode });
-});
-socket.on('room-reset', (room) => showLobby(room));
-
-// ---- Disconnect / abort handling ----
-socket.on('game-aborted', ({ room, message }) => {
-  showLobby(room);
-  abortBanner.textContent = message;
-  abortBanner.style.display = 'block';
-});
-
-// ---- Pass & Play (local) mode ----
-let localNames = [];
-let localGame = null;
-let localPassIndex = 0;
-
-const localNameInput = document.getElementById('local-name-input');
-const localAddBtn = document.getElementById('local-add-btn');
-const localPlayerList = document.getElementById('local-player-list');
-const localStartBtn = document.getElementById('local-start-btn');
-const localPassName = document.getElementById('local-pass-name');
-const localRevealBox = document.getElementById('local-reveal-box');
-const localRevealPrompt = document.getElementById('local-reveal-prompt');
-const localRevealWord = document.getElementById('local-reveal-word');
-const localNextPassBtn = document.getElementById('local-next-pass-btn');
-const localAccuseOptions = document.getElementById('local-accuse-options');
-const localResultsCardInner = document.getElementById('local-results-card-inner');
-const localResultsHeadline = document.getElementById('local-results-headline');
-const localResultsSubtext = document.getElementById('local-results-subtext');
-const localResultsCitizenWord = document.getElementById('local-results-citizen-word');
-const localResultsImposterWord = document.getElementById('local-results-imposter-word');
-const localPlayAgainBtn = document.getElementById('local-play-again-btn');
-
-localAddBtn.addEventListener('click', () => {
-  const name = localNameInput.value.trim();
-  if (!name) return;
-  localNames.push(name);
-  localNameInput.value = '';
-  renderLocalPlayerList();
-});
-localNameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') localAddBtn.click(); });
-
-function renderLocalPlayerList() {
-  localPlayerList.innerHTML = '';
-  localNames.forEach((name, i) => {
-    const li = document.createElement('li');
-    li.className = 'player-card';
-    li.appendChild(avatarSpan(name));
-    const span = document.createElement('span');
-    span.className = 'player-name';
-    span.textContent = name;
-    li.appendChild(span);
-    const removeBtn = document.createElement('button');
-    removeBtn.className = 'btn-ghost';
-    removeBtn.textContent = 'Remove';
-    removeBtn.addEventListener('click', () => { localNames.splice(i, 1); renderLocalPlayerList(); });
-    li.appendChild(removeBtn);
-    localPlayerList.appendChild(li);
-  });
-  localStartBtn.disabled = localNames.length < 3;
+function localPass() {
+  const player = localGame.players[localIndex], isGif = localGame.mode === 'gif-imposter';
+  show('local-pass'); document.querySelector('#local-person').textContent = `Pass the device to ${player.name}`;
+  document.querySelector('#local-reveal-prompt').textContent = `Tap to reveal your ${isGif ? 'GIF' : 'word'}`;
+  const item = document.querySelector('#local-word'); item.innerHTML = ''; document.querySelector('#local-choice').innerHTML = ''; document.querySelector('#local-next').style.display = 'none';
+  document.querySelector('#local-reveal').onclick = () => { if (isGif) item.innerHTML = gifMarkup(player.item); else item.textContent = player.item; document.querySelector('#local-next').style.display = 'block'; };
 }
-
-localStartBtn.addEventListener('click', () => {
-  localGame = createLocalGame(localNames);
-  localPassIndex = 0;
-  showLocalPassScreen();
-});
-
-function showLocalPassScreen() {
-  switchScreen(localPassScreen);
-  const player = localGame.players[localPassIndex];
-  localPassName.textContent = `Pass the device to ${player.name}`;
-  localRevealPrompt.style.display = 'block';
-  localRevealWord.style.display = 'none';
-  localRevealWord.textContent = '';
-  localNextPassBtn.style.display = 'none';
+function showLocalImposterResult(accused) {
+  const imposter = localGame.players.findIndex(p => p.isImposter), won = accused === imposter, citizen = localGame.players.find(p => !p.isImposter).item;
+  show('local-result'); document.querySelector('#local-result-card').className = `results-card ${won ? 'win' : 'lose'}`; document.querySelector('#local-result-title').textContent = won ? 'Citizens win!' : 'Imposter wins!'; document.querySelector('#local-result-text').textContent = `${localGame.players[imposter].name} was the imposter.`;
+  const items = document.querySelector('#local-result-items'); items.innerHTML = localGame.mode === 'gif-imposter' ? `<div class="word-chip"><span class="word-chip-label">Citizen GIF</span>${gifMarkup(citizen, true)}</div><div class="word-chip word-chip-imposter"><span class="word-chip-label">Imposter GIF</span>${gifMarkup(localGame.players[imposter].item, true)}</div>` : `<div class="word-chip"><span class="word-chip-label">Citizen word</span><span class="word-chip-value">${citizen}</span></div><div class="word-chip word-chip-imposter"><span class="word-chip-label">Imposter word</span><span class="word-chip-value">${localGame.players[imposter].item}</span></div>`;
+  document.querySelector('#local-tally').innerHTML = ''; document.querySelector('#local-again').textContent = 'Next game'; document.querySelector('#local-again').onclick = restartLocalGame; const choose = document.querySelector('#local-choose-game'); choose.style.display = 'block'; choose.onclick = () => show('landing');
 }
-
-localRevealBox.addEventListener('click', () => {
-  const player = localGame.players[localPassIndex];
-  localRevealPrompt.style.display = 'none';
-  localRevealWord.style.display = 'block';
-  localRevealWord.textContent = player.word;
-  localNextPassBtn.style.display = 'block';
-});
-
-localNextPassBtn.addEventListener('click', () => {
-  localPassIndex++;
-  if (localPassIndex >= localGame.players.length) {
-    showLocalAccuseScreen();
-  } else {
-    showLocalPassScreen();
-  }
-});
-
-function showLocalAccuseScreen() {
-  switchScreen(localAccuseScreen);
-  localAccuseOptions.innerHTML = '';
-  localGame.players.forEach((player, index) => {
-    const card = document.createElement('button');
-    card.className = 'vote-card';
-    card.appendChild(avatarSpan(player.name));
-    const label = document.createElement('div');
-    label.textContent = player.name;
-    card.appendChild(label);
-    card.addEventListener('click', () => {
-      const results = computeLocalResults(localGame.players, index);
-      showLocalResults(results);
-    });
-    localAccuseOptions.appendChild(card);
-  });
-}
-
-function showLocalResults(results) {
-  switchScreen(localResultsScreen);
-  localResultsCardInner.className = 'results-card ' + (results.citizensWin ? 'win' : 'lose');
-  localResultsHeadline.textContent = results.citizensWin ? '🎉 Citizens win!' : '🕵️ Imposter wins!';
-  localResultsSubtext.textContent = `${results.imposterName} was the imposter`;
-  localResultsCitizenWord.textContent = results.citizenWord;
-  localResultsImposterWord.textContent = results.imposterWord;
-  if (results.citizensWin) launchConfetti();
-}
-
-localPlayAgainBtn.addEventListener('click', () => {
-  localNames = [];
-  localGame = null;
-  renderLocalPlayerList();
-  switchScreen(localSetupScreen);
-});
-
-// Initial screen
-switchScreen(modeSelectScreen);
+show('landing', false);

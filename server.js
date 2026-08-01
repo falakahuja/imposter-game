@@ -1,121 +1,14 @@
-const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
-const path = require('path');
-const {
-  createRoom, joinRoom, removePlayer, getRoom,
-  startGame, submitClue, submitVote, setRounds, resetRoom,
-} = require('./rooms');
-
-const app = express();
-const server = http.createServer(app);
-const io = new Server(server);
-
-app.use(express.static(path.join(__dirname, 'public')));
-
-io.on('connection', (socket) => {
-  socket.on('create-room', ({ name }) => {
-    const room = createRoom(socket.id, name);
-    socket.join(room.code);
-    socket.emit('room-joined', room);
-  });
-
-  socket.on('join-room', ({ code, name }) => {
-    const result = joinRoom(code.toUpperCase(), socket.id, name);
-    if (result.error) return socket.emit('join-error', { message: result.error });
-    socket.join(result.room.code);
-    socket.emit('room-joined', result.room);
-    socket.to(result.room.code).emit('room-updated', result.room);
-  });
-
-  socket.on('set-rounds', ({ code, rounds }) => {
-    const result = setRounds(code, socket.id, rounds);
-    if (result.error) return socket.emit('start-error', { message: result.error });
-    io.to(result.room.code).emit('room-updated', result.room);
-  });
-
-  socket.on('start-game', ({ code }) => {
-    const result = startGame(code, socket.id);
-    if (result.error) return socket.emit('start-error', { message: result.error });
-
-    const room = result.room;
-    room.players.forEach((player) => io.to(player.id).emit('your-word', { word: player.word }));
-    io.to(room.code).emit('game-started', {
-      code: room.code,
-      players: room.players.map(p => ({ id: p.id, name: p.name })),
-      currentPlayerId: room.players[room.turnIndex].id,
-      currentRound: room.currentRound,
-      totalRounds: room.totalRounds,
-    });
-  });
-
-  socket.on('submit-clue', ({ code, clue }) => {
-    const result = submitClue(code, socket.id, clue);
-    if (result.error) return socket.emit('clue-error', { message: result.error });
-
-    const room = result.room;
-    io.to(room.code).emit('clue-submitted', {
-      clues: room.clues,
-      currentRound: room.currentRound,
-      totalRounds: room.totalRounds,
-      currentPlayerId: room.state === 'playing' ? room.players[room.turnIndex].id : null,
-      gameComplete: result.gameComplete,
-    });
-  });
-
-  socket.on('submit-vote', ({ code, votedForId }) => {
-    const result = submitVote(code, socket.id, votedForId);
-    if (result.error) return socket.emit('vote-error', { message: result.error });
-
-    io.to(code).emit('vote-progress', { votesSoFar: result.votesSoFar, totalPlayers: result.totalPlayers });
-    if (result.allVoted) io.to(code).emit('game-results', result.results);
-  });
-
-  socket.on('play-again', ({ code }) => {
-    const result = resetRoom(code, socket.id);
-    if (result.error) return socket.emit('start-error', { message: result.error });
-    io.to(result.room.code).emit('room-reset', result.room);
-  });
-
-  socket.on('disconnect', () => {
-    const result = removePlayer(socket.id);
-    if (!result || result.roomDeleted) return;
-
-    const room = result.room;
-
-    if (result.aborted) {
-      io.to(room.code).emit('game-aborted', {
-        room,
-        message: 'A player left and there are not enough players to continue. Back to the lobby.',
-      });
-      return;
-    }
-
-    io.to(room.code).emit('room-updated', room);
-
-    if (result.results) {
-      io.to(room.code).emit('game-results', result.results);
-      return;
-    }
-    if (room.state === 'playing') {
-      io.to(room.code).emit('clue-submitted', {
-        clues: room.clues,
-        currentRound: room.currentRound,
-        totalRounds: room.totalRounds,
-        currentPlayerId: room.players[room.turnIndex].id,
-        gameComplete: false,
-      });
-    }
-    if (room.state === 'voting') {
-      io.to(room.code).emit('vote-progress', {
-        votesSoFar: Object.keys(room.votes).length,
-        totalPlayers: room.players.length,
-      });
-    }
-  });
+const express = require('express'); const http = require('http'); const { Server } = require('socket.io'); const path = require('path');
+const { createRoom, joinRoom, updateSettings, startGame, gameAction, resetRoom, removePlayer, publicRoom } = require('./rooms'); const { getMode } = require('./modes');
+const app = express(); const server = http.createServer(app); const io = new Server(server); app.use(express.static(path.join(__dirname, 'public')));
+function emitState(room, state) { io.to(room.code).emit('game-state', state || getMode(room.modeId).engine.getPublicState(room)); }
+io.on('connection', socket => {
+ socket.on('create-room', ({ name, modeId }) => { const r = createRoom(socket.id, String(name || '').trim(), modeId); if (r.error) return socket.emit('join-error', { message: r.error }); socket.join(r.room.code); socket.emit('room-joined', publicRoom(r.room)); });
+ socket.on('join-room', ({ code, name }) => { const r = joinRoom(String(code || '').toUpperCase(), socket.id, String(name || '').trim()); if (r.error) return socket.emit('join-error', { message: r.error }); socket.join(r.room.code); socket.emit('room-joined', publicRoom(r.room)); socket.to(r.room.code).emit('room-updated', publicRoom(r.room)); });
+ socket.on('update-settings', ({ code, settings }) => { const r = updateSettings(code, socket.id, settings); if (r.error) return socket.emit('start-error', { message: r.error }); io.to(r.room.code).emit('room-updated', publicRoom(r.room)); });
+ socket.on('start-game', ({ code }) => { const r = startGame(code, socket.id); if (r.error) return socket.emit('start-error', { message: r.error }); (r.privateAssignments || []).forEach(a => io.to(a.playerId).emit('game-private', a)); emitState(r.room, r.publicState); });
+ socket.on('game-action', ({ code, action, payload }) => { const r = gameAction(code, socket.id, action, payload); if (r.error) return socket.emit('game-error', { message: r.error }); emitState(r.room, r.publicState); if (r.results) io.to(r.room.code).emit('game-results', r.results); if (r.sessionComplete) io.to(r.room.code).emit('session-complete'); });
+ socket.on('play-again', ({ code }) => { const r = resetRoom(code, socket.id); if (r.error) return socket.emit('start-error', { message: r.error }); io.to(r.room.code).emit('room-reset', publicRoom(r.room)); });
+ socket.on('disconnect', () => { const r = removePlayer(socket.id); if (!r || r.roomDeleted) return; io.to(r.room.code).emit('room-updated', publicRoom(r.room)); if (r.aborted) return io.to(r.room.code).emit('game-aborted', { room: publicRoom(r.room), message: 'Not enough players to continue. Back to the lobby.' }); emitState(r.room, r.publicState); if (r.results) io.to(r.room.code).emit('game-results', r.results); });
 });
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`Server running at http://localhost:${PORT}`);
-});
+server.listen(process.env.PORT || 3000, () => console.log('Server running at http://localhost:3000'));
