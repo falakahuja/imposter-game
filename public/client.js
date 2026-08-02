@@ -19,7 +19,18 @@ const localGifPairs = [
 const localPrompts = ['Who is most likely to become famous?', 'Who is most likely to survive a zombie apocalypse?', 'Who is most likely to be late to their own wedding?', 'Who is most likely to start a business?', 'Who is most likely to win a reality show?'];
 const screens = [...document.querySelectorAll('[data-screen]')];
 let historyStack = ['landing'], popping = false, selectedMode, room, privateItem;
-function show(id, push = true) { screens.forEach(s => s.style.display = s.id === id ? 'block' : 'none'); if (push && !popping && historyStack.at(-1) !== id) { historyStack.push(id); history.pushState({ screen: id }, ''); } }
+function animateScreen(screen) {
+  screen.classList.remove('screen-active');
+  void screen.offsetWidth;
+  screen.classList.add('screen-active');
+  if (!window.gsap || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const feature = screen.querySelector('h1, h2, .word-reveal-card, .results-card');
+  const items = [...screen.querySelectorAll('.btn, .input-field, .game-card, .player-card, .vote-card')];
+  const tl = gsap.timeline({ defaults: { ease: 'power3.out' } });
+  if (feature) tl.fromTo(feature, { y: 22, rotate: -1.5, scale: .96, opacity: 0 }, { y: 0, rotate: 0, scale: 1, opacity: 1, duration: .62 });
+  if (items.length) tl.fromTo(items, { y: 18, rotate: .65, opacity: 0 }, { y: 0, rotate: 0, opacity: 1, duration: .38, stagger: .055 }, feature ? '-=.28' : 0);
+}
+function show(id, push = true) { screens.forEach(s => { const active = s.id === id; s.style.display = active ? 'block' : 'none'; if (active) animateScreen(s); }); if (push && !popping && historyStack.at(-1) !== id) { historyStack.push(id); history.pushState({ screen: id }, ''); } }
 history.replaceState({ screen: 'landing' }, '');
 window.onpopstate = () => { if (historyStack.length > 1) { popping = true; historyStack.pop(); show(historyStack.at(-1), false); popping = false; } };
 document.querySelectorAll('.back-btn').forEach(b => b.onclick = () => history.back());
@@ -202,3 +213,27 @@ function showLocalImposterResult(accused) {
   document.querySelector('#local-tally').innerHTML = ''; document.querySelector('#local-again').textContent = 'Next game'; document.querySelector('#local-again').onclick = restartLocalGame; const choose = document.querySelector('#local-choose-game'); choose.style.display = 'block'; choose.onclick = () => show('landing');
 }
 show('landing', false);
+
+// Lightweight, tactile motion for the parts of the table players interact with most.
+if (window.gsap && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+  document.addEventListener('pointermove', event => {
+    const card = event.target.closest('.game-card, .vote-card');
+    if (!card) return;
+    const box = card.getBoundingClientRect();
+    const x = (event.clientX - box.left) / box.width - .5;
+    const y = (event.clientY - box.top) / box.height - .5;
+    gsap.to(card, { rotateY: x * 3, rotateX: -y * 3, transformPerspective: 650, duration: .3, overwrite: true });
+  });
+  document.addEventListener('pointerout', event => {
+    const card = event.target.closest('.game-card, .vote-card');
+    if (card && !card.contains(event.relatedTarget)) gsap.to(card, { rotateX: 0, rotateY: 0, duration: .45, ease: 'power2.out' });
+  });
+  if (window.ScrollTrigger) {
+    gsap.registerPlugin(ScrollTrigger);
+    gsap.to('.app-shell', {
+      y: -14,
+      ease: 'none',
+      scrollTrigger: { trigger: document.body, start: 'top top', end: 'bottom bottom', scrub: .7 }
+    });
+  }
+}
