@@ -18,17 +18,32 @@ const localGifPairs = [
 ];
 const localPrompts = ['Who is most likely to become famous?', 'Who is most likely to survive a zombie apocalypse?', 'Who is most likely to be late to their own wedding?', 'Who is most likely to start a business?', 'Who is most likely to win a reality show?'];
 const screens = [...document.querySelectorAll('[data-screen]')];
+const activeScreenAnimations = new WeakMap();
 let historyStack = ['landing'], popping = false, selectedMode, room, privateItem;
 function animateScreen(screen) {
+  const feature = screen.querySelector('h1, h2, .word-reveal-card, .results-card');
+  const items = [...screen.querySelectorAll('.btn, .input-field, .game-card, .player-card, .vote-card')];
+  const targets = [feature, ...items].filter(Boolean);
+  const previous = activeScreenAnimations.get(screen);
+  if (previous) {
+    previous.timeline.kill();
+    if (window.gsap) gsap.set(previous.targets, { clearProps: 'opacity,transform' });
+    activeScreenAnimations.delete(screen);
+  }
   screen.classList.remove('screen-active');
   void screen.offsetWidth;
   screen.classList.add('screen-active');
   if (!window.gsap || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  const feature = screen.querySelector('h1, h2, .word-reveal-card, .results-card');
-  const items = [...screen.querySelectorAll('.btn, .input-field, .game-card, .player-card, .vote-card')];
+  gsap.killTweensOf(targets);
+  gsap.set(targets, { clearProps: 'opacity,transform' });
   const tl = gsap.timeline({ defaults: { ease: 'power3.out' } });
   if (feature) tl.fromTo(feature, { y: 22, rotate: -1.5, scale: .96, opacity: 0 }, { y: 0, rotate: 0, scale: 1, opacity: 1, duration: .62 });
   if (items.length) tl.fromTo(items, { y: 18, rotate: .65, opacity: 0 }, { y: 0, rotate: 0, opacity: 1, duration: .38, stagger: .055 }, feature ? '-=.28' : 0);
+  activeScreenAnimations.set(screen, { timeline: tl, targets });
+  tl.eventCallback('onComplete', () => {
+    gsap.set(targets, { clearProps: 'opacity,transform' });
+    if (activeScreenAnimations.get(screen)?.timeline === tl) activeScreenAnimations.delete(screen);
+  });
 }
 function show(id, push = true) { screens.forEach(s => { const active = s.id === id; s.style.display = active ? 'block' : 'none'; if (active) animateScreen(s); }); if (push && !popping && historyStack.at(-1) !== id) { historyStack.push(id); history.pushState({ screen: id }, ''); } }
 history.replaceState({ screen: 'landing' }, '');
